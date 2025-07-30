@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "oci-metrics": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/mcp-oci-metrics-server/dist/index.js"
+      ],
+      "env": {
+        "OCI_COMPARTMENT_ID": "your-compartment-ocid-here",
+        "OCI_REGION": "your-region-here",
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
