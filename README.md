@@ -1,21 +1,53 @@
-# OCI Metrics MCP Server
+# Enhanced OCI Metrics MCP Server
 
-A Model Context Protocol (MCP) server that provides Oracle Cloud Infrastructure (OCI) monitoring metrics access for Large Language Models. This server enables LLMs to query, analyze, and visualize OCI metrics through a secure, standardized interface.
+A Model Context Protocol (MCP) server that provides Oracle Cloud Infrastructure (OCI) monitoring metrics access for Large Language Models with **Grafana collection model architecture**. This enhanced server enables LLMs to query, analyze, and visualize OCI metrics through multi-tenancy support, advanced MQL queries, and template variables.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3+-blue.svg)](https://www.typescriptlang.org/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-compatible-purple.svg)](https://fastmcp.com)
+[![Grafana](https://img.shields.io/badge/Grafana-inspired-orange.svg)](https://grafana.com)
 
-## ✨ Features
+## 🆕 Enhanced Features (v2.0)
+
+### 🏢 **Multi-Tenancy Support**
+- Query metrics across multiple OCI tenancies
+- Instance Principal and User Principal authentication
+- Automatic tenancy discovery from OCI config
+- Cross-tenancy metric comparison
+
+### 🔍 **Advanced MQL (Metric Query Language)**
+- Enhanced query syntax: `CpuUtilization[5m].mean()`, `rate(NetworksBytesIn[1m])`
+- Query validation and suggestions
+- Template-based queries with variable substitution
+- Aggregation functions: mean, sum, max, min, rate, percentile
+
+### 📊 **Template Variables**
+- Dynamic dashboard variables (compartment, instance, namespace, metric)
+- Query-based variable resolution
+- Variable dependency management
+- Auto-refresh on time range changes
+
+### 🔐 **Enhanced Authentication**
+- Instance Principal (for OCI-hosted environments)
+- User Principal with multiple profile support
+- Automatic authentication context detection
+- Connection health monitoring
+
+### ⚙️ **Grafana-Style Datasource Management**
+- Datasource configuration with validation
+- Export/import configuration for backup
+- Real-time connection testing
+- Multi-region support
+
+## ✨ Core Features
 
 - 🔍 **Query OCI Metrics**: Access metrics from OCI Monitoring, Stack Monitoring, DB Management, and OPS Insights
 - 📊 **LLM-Compatible Visualizations**: ASCII charts and data tables that work in any LLM context
 - 🌐 **Interactive Charts**: Optional Plotly.js charts for web browser environments
 - 🔄 **Instance Correlation**: Correlate metrics across compute instances and services
 - 🎯 **Anomaly Detection**: Prepare metrics data for anomaly detection workflows
-- 🔐 **Secure Authentication**: Uses OCI CLI configuration with API key authentication
-- ⚡ **Multiple Interfaces**: FastMCP and standard MCP server implementations
+- ⚡ **Multiple Interfaces**: Enhanced and standard MCP server implementations
 
 ## 🚀 Quick Start
 
@@ -59,6 +91,12 @@ oci iam compartment list
 # Build TypeScript
 npm run build
 
+# Start enhanced server (default)
+npm start
+
+# Or start standard server
+npm run start:standard
+
 # Test the server
 node test-server.js
 ```
@@ -84,7 +122,90 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 
 ## 🛠️ Available Tools
 
-### 1. `query_oci_metrics`
+### Enhanced Tools (v2.0)
+
+#### 1. `manage_datasource_config`
+Manage OCI datasource configuration with multi-tenancy support.
+
+**Actions**: list, add, remove, set_default, test, export, import
+
+**Example**:
+```json
+{
+  "action": "list"
+}
+```
+
+#### 2. `query_mql`
+Execute MQL (Metric Query Language) queries with advanced syntax.
+
+**Parameters**:
+- `query` (required): MQL query string (e.g., "CpuUtilization[5m].mean()")
+- `namespace` (required): OCI namespace
+- `tenancyId` (optional): Tenancy to use for query
+- `timeRange` (optional): Time range override
+- `variables` (optional): Template variables
+
+**Example**:
+```json
+{
+  "query": "CpuUtilization[5m].percentile(95)",
+  "namespace": "oci_computeagent"
+}
+```
+
+#### 3. `manage_template_variables`
+Manage template variables for dynamic queries.
+
+**Actions**: list, add, update, remove, refresh, resolve
+
+**Example**:
+```json
+{
+  "action": "refresh",
+  "variableName": "compartment"
+}
+```
+
+#### 4. `manage_authentication`
+Manage OCI authentication contexts and test connectivity.
+
+**Actions**: list, test, test_all, refresh, report
+
+**Example**:
+```json
+{
+  "action": "test_all"
+}
+```
+
+#### 5. `query_cross_tenancy`
+Query metrics across multiple tenancies for comparison.
+
+**Example**:
+```json
+{
+  "queries": [
+    {
+      "tenancyId": "prod",
+      "namespace": "oci_computeagent",
+      "metricName": "CpuUtilization"
+    },
+    {
+      "tenancyId": "dev",
+      "namespace": "oci_computeagent", 
+      "metricName": "CpuUtilization"
+    }
+  ],
+  "timeRange": {
+    "startTime": "1h"
+  }
+}
+```
+
+### Core Tools
+
+#### 1. `query_oci_metrics`
 Query OCI monitoring metrics with Logan MCP compatible timestamps.
 
 **Parameters**:
@@ -126,6 +247,86 @@ Verify OCI connectivity and configuration.
 Get Logan MCP compatible time ranges and intervals.
 
 ## 📊 Usage Examples
+
+### Enhanced MQL Queries (v2.0)
+
+#### Advanced Aggregations
+```json
+// 95th percentile CPU over 5 minutes
+{
+  "query": "CpuUtilization[5m].percentile(95)",
+  "namespace": "oci_computeagent"
+}
+
+// Rate of network bytes over 1 minute  
+{
+  "query": "rate(NetworksBytesIn[1m])",
+  "namespace": "oci_computeagent"
+}
+
+// Maximum memory utilization with grouping
+{
+  "query": "MemoryUtilization[5m].max() by (resourceId)",
+  "namespace": "oci_computeagent"
+}
+```
+
+#### Template Variables
+```json
+// Query with template variable substitution
+{
+  "query": "$metric[$interval].$aggregation()",
+  "namespace": "oci_computeagent",
+  "variables": {
+    "metric": "CpuUtilization",
+    "interval": "5m", 
+    "aggregation": "mean"
+  }
+}
+```
+
+#### Cross-Tenancy Comparison
+```json
+{
+  "queries": [
+    {
+      "tenancyId": "production",
+      "namespace": "oci_computeagent",
+      "metricName": "CpuUtilization",
+      "compartmentId": "ocid1.compartment.oc1..prod"
+    },
+    {
+      "tenancyId": "development", 
+      "namespace": "oci_computeagent",
+      "metricName": "CpuUtilization",
+      "compartmentId": "ocid1.compartment.oc1..dev"
+    }
+  ],
+  "timeRange": {
+    "startTime": "1h"
+  },
+  "generateComparison": true
+}
+```
+
+#### Multi-Tenancy Management
+```json
+// List all configured tenancies
+{
+  "action": "list"
+}
+
+// Test specific tenancy connection
+{
+  "action": "test",
+  "tenancyId": "production"
+}
+
+// Test all authentication contexts
+{
+  "action": "test_all"
+}
+```
 
 ### Basic Metrics Query
 ```typescript

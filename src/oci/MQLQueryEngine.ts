@@ -1,0 +1,552 @@
+/**
+ * Enhanced MQL (Metric Query Language) Engine
+ * Based on OCI Grafana plugin MQL patterns and OCI Monitoring Query Language
+ */
+
+import moment from 'moment-timezone';
+import { MetricQuery, MetricResult, TimeRange, MetricDataPoint } from '../types/index.js';
+
+export interface MQLQuery {
+  metricName: string;
+  namespace: string;
+  dimensions?: Record<string, string>;
+  window?: string;
+  resolution?: string;
+  aggregation?: MQLAggregation;
+  filters?: MQLFilter[];
+  groupBy?: string[];
+  alarmConditions?: MQLAlarmCondition[];
+}
+
+export interface MQLFilter {
+  dimension: string;
+  operator: '=' | '!=' | '~' | '!~' | 'in' | 'not in';
+  value: string | string[];
+}
+
+export interface MQLAlarmCondition {
+  operator: '>' | '<' | '>=' | '<=' | '==' | '!=';
+  threshold: number;
+  duration?: string;
+}
+
+export type MQLAggregation = 
+  | 'mean' | 'sum' | 'count' | 'max' | 'min' 
+  | 'rate' | 'percentile' | 'stddev' | 'variance'
+  | 'absent' | 'present';
+
+export interface MQLTemplate {
+  name: string;
+  query: string;
+  variables: string[];
+  description?: string;
+}
+
+export interface MQLVariable {
+  name: string;
+  type: 'constant' | 'interval' | 'custom' | 'query' | 'datasource' | 'textbox';
+  value?: string | string[];
+  query?: string;
+  regex?: string;
+  allValue?: string;
+  includeAll?: boolean;
+  multiValue?: boolean;
+}
+
+export class MQLQueryEngine {
+  private variables: Map<string, MQLVariable> = new Map();
+  private templates: Map<string, MQLTemplate> = new Map();
+
+  constructor() {
+    this.initializeDefaultVariables();
+    this.initializeDefaultTemplates();
+  }
+
+  /**
+   * Initialize default template variables
+   */
+  private initializeDefaultVariables(): void {
+    // Time interval variables
+    this.addVariable({
+      name: 'interval',
+      type: 'interval',
+      value: 'auto',
+      includeAll: false,
+      multiValue: false
+    });
+
+    // Common dimension variables
+    this.addVariable({
+      name: 'compartment',
+      type: 'query',
+      query: 'compartments()',
+      includeAll: true,
+      multiValue: true
+    });
+
+    this.addVariable({
+      name: 'instance',
+      type: 'query',
+      query: 'instances($compartment)',
+      includeAll: true,
+      multiValue: true
+    });
+
+    this.addVariable({
+      name: 'namespace',
+      type: 'query',
+      query: 'namespaces()',
+      includeAll: false,
+      multiValue: false
+    });
+  }
+
+  /**
+   * Initialize default query templates
+   */
+  private initializeDefaultTemplates(): void {
+    // Basic metric template
+    this.addTemplate({
+      name: 'basic_metric',
+      query: '{metricName}[$interval].{aggregation}()',
+      variables: ['metricName', 'interval', 'aggregation'],
+      description: 'Basic metric query with configurable aggregation'
+    });
+
+    // Filtered metric template
+    this.addTemplate({
+      name: 'filtered_metric',
+      query: '{metricName}[$interval]{{{filters}}}.{aggregation}()',
+      variables: ['metricName', 'interval', 'filters', 'aggregation'],
+      description: 'Metric query with dimension filters'
+    });
+
+    // Grouped metric template
+    this.addTemplate({
+      name: 'grouped_metric',
+      query: '{metricName}[$interval]{{{filters}}}.{aggregation}() by ({groupBy})',
+      variables: ['metricName', 'interval', 'filters', 'aggregation', 'groupBy'],
+      description: 'Metric query with grouping by dimensions'
+    });
+
+    // Rate calculation template
+    this.addTemplate({
+      name: 'rate_metric',
+      query: 'rate({metricName}[$interval]{{{filters}}})',
+      variables: ['metricName', 'interval', 'filters'],
+      description: 'Rate calculation for counter metrics'
+    });
+
+    // Percentile template
+    this.addTemplate({
+      name: 'percentile_metric',
+      query: '{metricName}[$interval]{{{filters}}}.percentile({percentile})',
+      variables: ['metricName', 'interval', 'filters', 'percentile'],
+      description: 'Percentile calculation for metrics'
+    });
+  }
+
+  /**
+   * Parse MQL query string into structured query
+   */
+  parseMQL(queryString: string): MQLQuery {
+    const query: MQLQuery = {
+      metricName: '',
+      namespace: '',
+      aggregation: 'mean'
+    };
+
+    // Remove whitespace and normalize
+    const normalized = queryString.trim();
+
+    // Extract metric name and window
+    const metricMatch = normalized.match(/^([^[\]{}()]+)(\[[^\]]+\])?/);
+    if (metricMatch) {
+      query.metricName = metricMatch[1].trim();
+      
+      if (metricMatch[2]) {
+        query.window = metricMatch[2].slice(1, -1); // Remove brackets
+      }
+    }
+
+    // Extract dimensions/filters
+    const dimensionsMatch = normalized.match(/\{([^}]+)\}/);
+    if (dimensionsMatch) {
+      query.dimensions = this.parseDimensions(dimensionsMatch[1]);
+    }
+
+    // Extract aggregation function
+    const aggregationMatch = normalized.match(/\.(\w+)\(/);
+    if (aggregationMatch) {
+      query.aggregation = aggregationMatch[1] as MQLAggregation;
+    }
+
+    // Extract groupBy
+    const groupByMatch = normalized.match(/by\s*\(([^)]+)\)/);
+    if (groupByMatch) {
+      query.groupBy = groupByMatch[1].split(',').map(g => g.trim());
+    }
+
+    return query;
+  }
+
+  /**
+   * Parse dimension filters from MQL string
+   */
+  private parseDimensions(dimensionString: string): Record<string, string> {
+    const dimensions: Record<string, string> = {};
+    
+    // Split by comma, but respect quoted values
+    const parts = dimensionString.match(/[^,]+/g) || [];
+    
+    for (const part of parts) {
+      const trimmed = part.trim();
+      const eqMatch = trimmed.match(/^([^=]+)=(.+)$/);
+      
+      if (eqMatch) {
+        const key = eqMatch[1].trim();
+        let value = eqMatch[2].trim();
+        
+        // Remove quotes if present
+        if ((value.startsWith('"') && value.endsWith('"')) || 
+            (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        
+        dimensions[key] = value;
+      }
+    }
+    
+    return dimensions;
+  }
+
+  /**
+   * Build MQL query string from structured query
+   */
+  buildMQL(query: MQLQuery): string {
+    let mqlString = query.metricName;
+
+    // Add window/interval
+    if (query.window) {
+      mqlString += `[${query.window}]`;
+    }
+
+    // Add dimensions
+    if (query.dimensions && Object.keys(query.dimensions).length > 0) {
+      const dimensionParts = Object.entries(query.dimensions)
+        .map(([key, value]) => `${key}="${value}"`)
+        .join(',');
+      mqlString += `{${dimensionParts}}`;
+    }
+
+    // Add aggregation
+    if (query.aggregation && query.aggregation !== 'rate') {
+      if (query.aggregation === 'percentile') {
+        mqlString += `.percentile(95)`; // Default percentile
+      } else {
+        mqlString += `.${query.aggregation}()`;
+      }
+    } else if (query.aggregation === 'rate') {
+      mqlString = `rate(${mqlString})`;
+    }
+
+    // Add groupBy
+    if (query.groupBy && query.groupBy.length > 0) {
+      mqlString += ` by (${query.groupBy.join(', ')})`;
+    }
+
+    return mqlString;
+  }
+
+  /**
+   * Resolve template variables in query string
+   */
+  resolveVariables(queryString: string, customValues?: Record<string, string>): string {
+    let resolved = queryString;
+
+    // Resolve template variables like $variable or ${variable}
+    const variablePattern = /(\$\{([^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_]*))/g;
+    
+    resolved = resolved.replace(variablePattern, (match, fullMatch, bracketVar, simpleVar) => {
+      const varName = bracketVar || simpleVar;
+      
+      // Check custom values first
+      if (customValues && customValues[varName]) {
+        return customValues[varName];
+      }
+      
+      // Check registered variables
+      const variable = this.variables.get(varName);
+      if (variable && variable.value) {
+        if (Array.isArray(variable.value)) {
+          return variable.value.join(',');
+        }
+        return String(variable.value);
+      }
+      
+      // Handle special variables
+      switch (varName) {
+        case '__interval':
+        case 'interval':
+          return this.resolveIntervalVariable();
+        case '__range':
+          return '24h'; // Default range
+        default:
+          return match; // Keep original if no resolution found
+      }
+    });
+
+    return resolved;
+  }
+
+  /**
+   * Resolve interval variable based on time range
+   */
+  private resolveIntervalVariable(): string {
+    const intervalVar = this.variables.get('interval');
+    if (intervalVar?.value === 'auto') {
+      // Auto-calculate based on time range
+      // This would typically be based on dashboard time range
+      return '1m'; // Default to 1 minute
+    }
+    return intervalVar?.value as string || '1m';
+  }
+
+  /**
+   * Add template variable
+   */
+  addVariable(variable: MQLVariable): void {
+    this.variables.set(variable.name, variable);
+  }
+
+  /**
+   * Get template variable
+   */
+  getVariable(name: string): MQLVariable | undefined {
+    return this.variables.get(name);
+  }
+
+  /**
+   * List all variables
+   */
+  listVariables(): MQLVariable[] {
+    return Array.from(this.variables.values());
+  }
+
+  /**
+   * Add query template
+   */
+  addTemplate(template: MQLTemplate): void {
+    this.templates.set(template.name, template);
+  }
+
+  /**
+   * Get query template
+   */
+  getTemplate(name: string): MQLTemplate | undefined {
+    return this.templates.get(name);
+  }
+
+  /**
+   * List all templates
+   */
+  listTemplates(): MQLTemplate[] {
+    return Array.from(this.templates.values());
+  }
+
+  /**
+   * Apply template with variable substitution
+   */
+  applyTemplate(templateName: string, variables: Record<string, string>): string {
+    const template = this.templates.get(templateName);
+    if (!template) {
+      throw new Error(`Template '${templateName}' not found`);
+    }
+
+    let query = template.query;
+
+    // Replace template variables
+    Object.entries(variables).forEach(([key, value]) => {
+      const patterns = [
+        new RegExp(`\\{${key}\\}`, 'g'),
+        new RegExp(`\\$\\{${key}\\}`, 'g'),
+        new RegExp(`\\$${key}\\b`, 'g')
+      ];
+
+      patterns.forEach(pattern => {
+        query = query.replace(pattern, value);
+      });
+    });
+
+    return query;
+  }
+
+  /**
+   * Validate MQL query syntax
+   */
+  validateMQL(queryString: string): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    try {
+      const query = this.parseMQL(queryString);
+
+      if (!query.metricName || query.metricName.trim() === '') {
+        errors.push('Metric name is required');
+      }
+
+      if (query.aggregation && !this.isValidAggregation(query.aggregation)) {
+        errors.push(`Invalid aggregation function: ${query.aggregation}`);
+      }
+
+      if (query.window && !this.isValidWindow(query.window)) {
+        errors.push(`Invalid window format: ${query.window}`);
+      }
+
+    } catch (error) {
+      errors.push(`Parse error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors
+    };
+  }
+
+  /**
+   * Check if aggregation function is valid
+   */
+  private isValidAggregation(aggregation: string): boolean {
+    const validAggregations = [
+      'mean', 'sum', 'count', 'max', 'min', 'rate', 
+      'percentile', 'stddev', 'variance', 'absent', 'present'
+    ];
+    return validAggregations.includes(aggregation);
+  }
+
+  /**
+   * Check if window format is valid
+   */
+  private isValidWindow(window: string): boolean {
+    // Check for valid time formats: 1m, 5m, 1h, 1d, etc.
+    return /^(\d+[smhd]|auto)$/.test(window);
+  }
+
+  /**
+   * Convert relative time to absolute timestamps
+   */
+  resolveTimeRange(startTime: string, endTime?: string): TimeRange {
+    const now = moment();
+    let start: moment.Moment;
+    let end: moment.Moment;
+
+    // Parse start time
+    if (startTime.match(/^\d+[smhd]$/)) {
+      // Relative time (e.g., "24h", "1d")
+      const value = parseInt(startTime);
+      const unit = startTime.slice(-1);
+      
+      const unitMap: Record<string, moment.unitOfTime.DurationConstructor> = {
+        's': 'seconds',
+        'm': 'minutes', 
+        'h': 'hours',
+        'd': 'days'
+      };
+
+      start = now.clone().subtract(value, unitMap[unit] || 'hours');
+    } else {
+      // Absolute time
+      start = moment(startTime);
+    }
+
+    // Parse end time
+    if (endTime) {
+      if (endTime.match(/^\d+[smhd]$/)) {
+        const value = parseInt(endTime);
+        const unit = endTime.slice(-1);
+        const unitMap: Record<string, moment.unitOfTime.DurationConstructor> = {
+          's': 'seconds',
+          'm': 'minutes',
+          'h': 'hours', 
+          'd': 'days'
+        };
+        end = now.clone().subtract(value, unitMap[unit] || 'hours');
+      } else {
+        end = moment(endTime);
+      }
+    } else {
+      end = now;
+    }
+
+    return {
+      startTime: start.toISOString(),
+      endTime: end.toISOString()
+    };
+  }
+
+  /**
+   * Generate query suggestions based on namespace
+   */
+  getQuerySuggestions(namespace: string): string[] {
+    const suggestions: string[] = [];
+
+    const namespaceTemplates: Record<string, string[]> = {
+      'oci_computeagent': [
+        'CpuUtilization[5m].mean()',
+        'MemoryUtilization[5m].max()',
+        'NetworksBytesIn[1m].rate()',
+        'DiskBytesRead[5m].sum() by (resourceId)'
+      ],
+      'oci_lbaas': [
+        'RequestCount[1m].sum()',
+        'ResponseTime[5m].percentile(95)',
+        'ActiveConnections[1m].mean()',
+        'HealthyBackendCount[1m].min()'
+      ],
+      'oci_vcn': [
+        'VnicBytesIn[1m].rate()',
+        'VnicBytesOut[1m].rate()',
+        'PacketsIn[1m].sum()',
+        'DroppedPacketsIn[5m].sum() by (resourceId)'
+      ]
+    };
+
+    return namespaceTemplates[namespace] || [
+      '{metricName}[5m].mean()',
+      '{metricName}[1m].sum()',
+      '{metricName}[1h].max()'
+    ];
+  }
+
+  /**
+   * Export configuration
+   */
+  exportConfig(): {
+    variables: Record<string, MQLVariable>;
+    templates: Record<string, MQLTemplate>;
+  } {
+    return {
+      variables: Object.fromEntries(this.variables.entries()),
+      templates: Object.fromEntries(this.templates.entries())
+    };
+  }
+
+  /**
+   * Import configuration
+   */
+  importConfig(config: {
+    variables?: Record<string, MQLVariable>;
+    templates?: Record<string, MQLTemplate>;
+  }): void {
+    if (config.variables) {
+      Object.entries(config.variables).forEach(([name, variable]) => {
+        this.variables.set(name, variable);
+      });
+    }
+
+    if (config.templates) {
+      Object.entries(config.templates).forEach(([name, template]) => {
+        this.templates.set(name, template);
+      });
+    }
+  }
+}

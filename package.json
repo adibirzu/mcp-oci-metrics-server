@@ -1,15 +1,20 @@
 {
   "name": "mcp-oci-metrics-server",
-  "version": "1.0.0",
-  "description": "MCP server for OCI Monitoring metrics with graph generation capabilities",
+  "version": "2.0.0",
+  "description": "Enhanced MCP server for OCI Monitoring metrics with Grafana collection model, multi-tenancy, and advanced MQL query support",
   "type": "module",
-  "main": "dist/index-standard.js",
+  "main": "dist/index-enhanced.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index-standard.js",
-    "dev": "tsc --watch",
+    "build:watch": "tsc --watch",
+    "start": "node dist/index-enhanced.js",
+    "start:standard": "node dist/index-standard.js",
+    "start:enhanced": "node dist/index-enhanced.js",
+    "dev": "tsc --watch & nodemon dist/index-enhanced.js",
+    "dev:standard": "tsc --watch & nodemon dist/index-standard.js", 
     "test": "node --test dist/**/*.test.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
