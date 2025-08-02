@@ -22,7 +22,7 @@ export interface MetricQuery {
   namespace: string;
   metricName: string;
   dimensions?: Record<string, string>;
-  aggregation?: 'mean' | 'sum' | 'count' | 'max' | 'min' | 'rate' | 'percentile' | 'stddev' | 'variance' | 'absent' | 'present';
+  aggregation?: 'mean' | 'sum' | 'count' | 'max' | 'min' | 'rate' | 'percentile' | 'stddev' | 'variance' | 'absent' | 'present' | 'stddev_over_time' | 'changes' | 'resets';
   interval?: string; // PT1M, PT5M, PT1H, etc.
   timeRange: TimeRange;
 }
@@ -231,7 +231,7 @@ export interface MQLAlarmCondition {
 export type MQLAggregation = 
   | 'mean' | 'sum' | 'count' | 'max' | 'min' 
   | 'rate' | 'percentile' | 'stddev' | 'variance'
-  | 'absent' | 'present';
+  | 'absent' | 'present' | 'stddev_over_time' | 'changes' | 'resets';
 
 export interface MQLTemplate {
   name: string;

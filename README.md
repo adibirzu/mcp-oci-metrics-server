@@ -17,10 +17,15 @@ A Model Context Protocol (MCP) server that provides Oracle Cloud Infrastructure 
 - Cross-tenancy metric comparison
 
 ### 🔍 **Advanced MQL (Metric Query Language)**
-- Enhanced query syntax: `CpuUtilization[5m].mean()`, `rate(NetworksBytesIn[1m])`
-- Query validation and suggestions
-- Template-based queries with variable substitution
-- Aggregation functions: mean, sum, max, min, rate, percentile
+- **Enhanced OCI-compliant syntax**: `CpuUtilization[5m].mean()`, `rate(NetworksBytesIn[1m])`
+- **Fuzzy matching**: `CpuUtilization[1m]{resourceDisplayName =~ "prod*"}.mean()`
+- **Alarm conditions**: `CpuUtilization[5m].mean() > 80`
+- **Join operations**: `CpuUtilization[5m].mean() && MemoryUtilization[5m].mean()`
+- **Absence detection**: `CpuUtilization[1m].absent(5m)`
+- **Arithmetic operations**: `TotalRequestLatency[1m].mean() / 1000`
+- **Query validation and suggestions**
+- **Template-based queries with variable substitution**
+- **Full aggregation support**: mean, sum, max, min, rate, percentile, absent, stddev
 
 ### 📊 **Template Variables**
 - Dynamic dashboard variables (compartment, instance, namespace, metric)
@@ -137,24 +142,77 @@ Manage OCI datasource configuration with multi-tenancy support.
 ```
 
 #### 2. `query_mql`
-Execute MQL (Metric Query Language) queries with advanced syntax.
+Execute MQL (Metric Query Language) queries with enhanced OCI-compliant syntax.
 
 **Parameters**:
-- `query` (required): MQL query string (e.g., "CpuUtilization[5m].mean()")
+- `query` (required): MQL query string with full OCI syntax support
 - `namespace` (required): OCI namespace
 - `tenancyId` (optional): Tenancy to use for query
 - `timeRange` (optional): Time range override
 - `variables` (optional): Template variables
 
-**Example**:
+**Supported MQL Features**:
+- **Time windows**: `1m`-`60m`, `1h`-`24h`, `1d`
+- **Aggregations**: `mean()`, `max()`, `min()`, `sum()`, `count()`, `percentile(p)`, `absent()`
+- **Operators**: `>`, `<`, `>=`, `<=`, `==`, `!=`, `=~`, `!~`, `in`, `not in`
+- **Functions**: `rate()`, `groupBy()`, `grouping()`
+- **Joins**: `&&` (AND), `||` (OR)
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%`
+
+**Examples**:
 ```json
+// Basic percentile query
 {
   "query": "CpuUtilization[5m].percentile(95)",
   "namespace": "oci_computeagent"
 }
+
+// Fuzzy matching with threshold
+{
+  "query": "CpuUtilization[5m]{resourceDisplayName =~ \"web*\"}.mean() > 80",
+  "namespace": "oci_computeagent"
+}
+
+// Absence detection
+{
+  "query": "CpuUtilization[1m].groupBy(resourceId).absent(5m)",
+  "namespace": "oci_computeagent"
+}
+
+// Join operation
+{
+  "query": "CpuUtilization[5m].mean() > 80 && MemoryUtilization[5m].mean() > 70",
+  "namespace": "oci_computeagent"
+}
 ```
 
-#### 3. `manage_template_variables`
+#### 3. `validate_mql`
+Validate MQL query syntax and get suggestions for corrections.
+
+**Parameters**:
+- `query` (required): MQL query string to validate
+
+**Example**:
+```json
+{
+  "query": "CpuUtilization[5m].mean() > 80"
+}
+```
+
+#### 4. `get_mql_suggestions`
+Get MQL query suggestions and templates for a specific namespace.
+
+**Parameters**:
+- `namespace` (required): OCI namespace to get suggestions for
+
+**Example**:
+```json
+{
+  "namespace": "oci_computeagent"
+}
+```
+
+#### 5. `manage_template_variables`
 Manage template variables for dynamic queries.
 
 **Actions**: list, add, update, remove, refresh, resolve
@@ -248,6 +306,8 @@ Get Logan MCP compatible time ranges and intervals.
 
 ## 📊 Usage Examples
 
+> **💡 Tip**: See [MQL_EXAMPLES.md](MQL_EXAMPLES.md) for comprehensive OCI MQL query examples and patterns.
+
 ### Enhanced MQL Queries (v2.0)
 
 #### Advanced Aggregations
@@ -268,6 +328,66 @@ Get Logan MCP compatible time ranges and intervals.
 {
   "query": "MemoryUtilization[5m].max() by (resourceId)",
   "namespace": "oci_computeagent"
+}
+```
+
+#### Fuzzy Matching and Filtering
+```json
+// Fuzzy match resources starting with "prod"
+{
+  "query": "CpuUtilization[5m]{resourceDisplayName =~ \"prod*\"}.mean()",
+  "namespace": "oci_computeagent"
+}
+
+// Multiple pattern matching
+{
+  "query": "CpuUtilization[1m]{resourceId in \"id1|id2|id3\"}.mean()",
+  "namespace": "oci_computeagent"
+}
+```
+
+#### Alarm Conditions
+```json
+// CPU threshold alarm
+{
+  "query": "CpuUtilization[5m].mean() > 80",
+  "namespace": "oci_computeagent"
+}
+
+// Absence detection
+{
+  "query": "CpuUtilization[1m].groupBy(resourceId).absent(5m)",
+  "namespace": "oci_computeagent"
+}
+```
+
+#### Join Operations
+```json
+// AND condition for high resource usage
+{
+  "query": "CpuUtilization[5m].mean() > 80 && MemoryUtilization[5m].mean() > 70",
+  "namespace": "oci_computeagent"
+}
+
+// OR condition for critical alerts
+{
+  "query": "CpuUtilization[5m].mean() > 90 || MemoryUtilization[5m].mean() > 95",
+  "namespace": "oci_computeagent"
+}
+```
+
+#### Unit Conversion
+```json
+// Convert milliseconds to seconds
+{
+  "query": "TotalRequestLatency[1m].mean() / 1000",
+  "namespace": "oci_objectstorage"
+}
+
+// Calculate total network throughput
+{
+  "query": "VnicBytesIn[1m].rate() + VnicBytesOut[1m].rate()",
+  "namespace": "oci_vcn"
 }
 ```
 
@@ -337,6 +457,15 @@ Get Logan MCP compatible time ranges and intervals.
   "startTime": "24h",
   "aggregation": "mean",
   "interval": "PT5M"
+}
+
+// Enhanced MQL equivalent
+{
+  "query": "CpuUtilization[5m].mean()",
+  "namespace": "oci_computeagent",
+  "timeRange": {
+    "startTime": "24h"
+  }
 }
 ```
 
@@ -415,21 +544,92 @@ This server is designed for seamless integration with Logan MCP:
 - `NetworksBytesIn/Out` - Network traffic
 - `DiskBytesRead/Written` - Disk I/O
 
+**Enhanced MQL Examples**:
+```mql
+# High CPU alert with fuzzy matching
+CpuUtilization[5m]{resourceDisplayName =~ "web*"}.mean() > 80
+
+# Memory usage by availability domain
+MemoryUtilization[5m].max() by (availabilityDomain)
+
+# Network throughput calculation
+rate(NetworksBytesIn[1m]) + rate(NetworksBytesOut[1m])
+
+# Absence detection for instances
+CpuUtilization[1m].groupBy(resourceId).absent(5m)
+```
+
 ### Load Balancer (`oci_lbaas`)
 - `RequestCount` - Number of requests
 - `ResponseTime` - Response latency
 - `ActiveConnections` - Current connections
 - `HealthyBackendCount` - Healthy backends
 
+**Enhanced MQL Examples**:
+```mql
+# 95th percentile response time
+ResponseTime[5m].percentile(95) > 500
+
+# Request rate by backend set
+RequestCount[1m].sum() by (backendSetName)
+
+# Health monitoring
+HealthyBackendCount[1m].min() < 2
+
+# Load balancer performance ratio
+RequestCount[1m].sum() / ActiveConnections[1m].mean()
+```
+
 ### VCN (`oci_vcn`)
 - `VnicBytesIn/Out` - VNIC network traffic
 - `PacketsIn/Out` - Packet counts
 - `DroppedPacketsIn/Out` - Dropped packets
 
+**Enhanced MQL Examples**:
+```mql
+# Total network throughput
+VnicBytesIn[1m].rate() + VnicBytesOut[1m].rate()
+
+# Dropped packet detection
+DroppedPacketsIn[5m].sum() > 100
+
+# Network performance monitoring
+(DroppedPacketsIn[5m].sum() / PacketsIn[5m].sum()) * 100 > 1
+```
+
 ### Database (`oci_database`)
 - `CpuUtilization` - Database CPU usage
 - `DatabaseConnections` - Active connections
 - `StorageUtilization` - Storage usage
+
+**Enhanced MQL Examples**:
+```mql
+# Database performance monitoring
+CpuUtilization[5m].mean() > 75 && DatabaseConnections[1m].count() > 80
+
+# Storage capacity planning
+StorageUtilization[1h].max() > 85
+
+# Connection limit monitoring
+DatabaseConnections[1m].count() / DatabaseConnectionsMax[1m].max() > 0.8
+```
+
+### Object Storage (`oci_objectstorage`)
+- `TotalRequestLatency` - Request latency in milliseconds
+- `RequestCount` - Number of requests
+- `ErrorCount` - Number of errors
+
+**Enhanced MQL Examples**:
+```mql
+# Convert latency to seconds
+TotalRequestLatency[1m].percentile(95) / 1000
+
+# Error rate calculation
+(ErrorCount[1m].sum() / RequestCount[1m].sum()) * 100 > 5
+
+# Request monitoring by bucket
+RequestCount[1m]{bucketName =~ "backup*"}.sum()
+```
 
 ## 🎨 Graph Types & Visualizations
 

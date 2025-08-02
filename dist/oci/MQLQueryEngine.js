@@ -84,9 +84,44 @@ export class MQLQueryEngine {
             variables: ['metricName', 'interval', 'filters', 'percentile'],
             description: 'Percentile calculation for metrics'
         });
+        // Alarm condition template
+        this.addTemplate({
+            name: 'alarm_condition',
+            query: '{metricName}[$interval]{{{filters}}}.{aggregation}() {operator} {threshold}',
+            variables: ['metricName', 'interval', 'filters', 'aggregation', 'operator', 'threshold'],
+            description: 'Alarm condition with threshold comparison'
+        });
+        // Absence alarm template
+        this.addTemplate({
+            name: 'absence_alarm',
+            query: '{metricName}[$interval]{{{filters}}}.groupBy({groupBy}).absent({duration})',
+            variables: ['metricName', 'interval', 'filters', 'groupBy', 'duration'],
+            description: 'Absence alarm for detecting missing metrics'
+        });
+        // Fuzzy matching template
+        this.addTemplate({
+            name: 'fuzzy_match',
+            query: '{metricName}[$interval]{{resourceDisplayName =~ "{pattern}"}}.{aggregation}()',
+            variables: ['metricName', 'interval', 'pattern', 'aggregation'],
+            description: 'Fuzzy matching query with wildcards'
+        });
+        // Join query template
+        this.addTemplate({
+            name: 'join_query',
+            query: '{metric1}[$interval].{aggregation1}() {joinOperator} {metric2}[$interval].{aggregation2}()',
+            variables: ['metric1', 'metric2', 'interval', 'aggregation1', 'aggregation2', 'joinOperator'],
+            description: 'Join two metrics with AND/OR operators'
+        });
+        // Unit conversion template
+        this.addTemplate({
+            name: 'unit_conversion',
+            query: '{metricName}[$interval].{aggregation}() / {conversionFactor}',
+            variables: ['metricName', 'interval', 'aggregation', 'conversionFactor'],
+            description: 'Convert metric units (e.g., milliseconds to seconds)'
+        });
     }
     /**
-     * Parse MQL query string into structured query
+     * Parse MQL query string into structured query with enhanced OCI MQL support
      */
     parseMQL(queryString) {
         const query = {
@@ -95,7 +130,27 @@ export class MQLQueryEngine {
             aggregation: 'mean'
         };
         // Remove whitespace and normalize
-        const normalized = queryString.trim();
+        let normalized = queryString.trim();
+        // Check for join operators (&&, ||)
+        const joinMatch = normalized.match(/(.*?)\s*(&&|\|\|)\s*(.*)/);
+        if (joinMatch) {
+            query.joinOperator = joinMatch[2];
+            // For now, parse the first part of the join
+            normalized = joinMatch[1].trim();
+        }
+        // Check for arithmetic operations (+, -, *, /, %)
+        const arithmeticMatch = normalized.match(/(.*?)\s*([+\-*/%])\s*(.*)/);
+        if (arithmeticMatch) {
+            query.arithmeticOperations = [arithmeticMatch[2]];
+            // For now, parse the first part
+            normalized = arithmeticMatch[1].trim();
+        }
+        // Check for rate() wrapper function
+        const rateMatch = normalized.match(/^rate\((.*)\)$/);
+        if (rateMatch) {
+            query.aggregation = 'rate';
+            normalized = rateMatch[1];
+        }
         // Extract metric name and window
         const metricMatch = normalized.match(/^([^[\]{}()]+)(\[[^\]]+\])?/);
         if (metricMatch) {
@@ -104,20 +159,44 @@ export class MQLQueryEngine {
                 query.window = metricMatch[2].slice(1, -1); // Remove brackets
             }
         }
-        // Extract dimensions/filters
+        // Extract dimensions/filters with enhanced operators
         const dimensionsMatch = normalized.match(/\{([^}]+)\}/);
         if (dimensionsMatch) {
             query.dimensions = this.parseDimensions(dimensionsMatch[1]);
+            query.filters = this.parseFilters(dimensionsMatch[1]);
+            // Check for fuzzy matching patterns
+            query.fuzzyMatching = dimensionsMatch[1].includes('=~') ||
+                dimensionsMatch[1].includes('*') ||
+                dimensionsMatch[1].includes('|');
         }
-        // Extract aggregation function
-        const aggregationMatch = normalized.match(/\.(\w+)\(/);
-        if (aggregationMatch) {
+        // Extract aggregation function with parameters
+        const aggregationMatch = normalized.match(/\.(\w+)\((\d*)\)/);
+        if (aggregationMatch && !rateMatch) {
             query.aggregation = aggregationMatch[1];
+            // Handle percentile parameter
+            if (query.aggregation === 'percentile' && aggregationMatch[2]) {
+                query.percentileValue = parseInt(aggregationMatch[2]);
+            }
         }
-        // Extract groupBy
-        const groupByMatch = normalized.match(/by\s*\(([^)]+)\)/);
+        // Extract groupBy with grouping() and groupBy() functions
+        const groupByMatch = normalized.match(/\.(grouping|groupBy)\(([^)]+)\)|by\s*\(([^)]+)\)/);
         if (groupByMatch) {
-            query.groupBy = groupByMatch[1].split(',').map(g => g.trim());
+            const groupByString = groupByMatch[2] || groupByMatch[3];
+            query.groupBy = groupByString.split(',').map(g => g.trim());
+        }
+        // Extract absence conditions
+        const absenceMatch = normalized.match(/\.absent\((\d*[smhd]?)\)/);
+        if (absenceMatch) {
+            query.aggregation = 'absent';
+            query.absencePeriod = absenceMatch[1] || '5m';
+        }
+        // Extract comparison operators for alarm conditions
+        const comparisonMatch = normalized.match(/\s*([><=!]+)\s*(\d+(?:\.\d+)?)/);
+        if (comparisonMatch) {
+            query.alarmConditions = [{
+                    operator: comparisonMatch[1],
+                    threshold: parseFloat(comparisonMatch[2])
+                }];
         }
         return query;
     }
@@ -130,19 +209,67 @@ export class MQLQueryEngine {
         const parts = dimensionString.match(/[^,]+/g) || [];
         for (const part of parts) {
             const trimmed = part.trim();
-            const eqMatch = trimmed.match(/^([^=]+)=(.+)$/);
-            if (eqMatch) {
-                const key = eqMatch[1].trim();
-                let value = eqMatch[2].trim();
+            // Handle various operators: =, !=, =~, !~
+            const opMatch = trimmed.match(/^([^=!~]+)(=~|!~|!=|=)(.+)$/);
+            if (opMatch) {
+                const key = opMatch[1].trim();
+                const operator = opMatch[2];
+                let value = opMatch[3].trim();
                 // Remove quotes if present
                 if ((value.startsWith('"') && value.endsWith('"')) ||
                     (value.startsWith("'") && value.endsWith("'"))) {
                     value = value.slice(1, -1);
                 }
-                dimensions[key] = value;
+                // For basic dimensions, only store exact matches
+                if (operator === '=') {
+                    dimensions[key] = value;
+                }
             }
         }
         return dimensions;
+    }
+    /**
+     * Parse advanced filters from MQL dimension string
+     */
+    parseFilters(dimensionString) {
+        const filters = [];
+        // Split by comma, but respect quoted values
+        const parts = dimensionString.match(/[^,]+/g) || [];
+        for (const part of parts) {
+            const trimmed = part.trim();
+            // Match various operators with enhanced support
+            const opMatch = trimmed.match(/^([^=!~<>]+)(=~|!~|!=|=|>=|<=|>|<|\s+in\s+|\s+not\s+in\s+)(.+)$/);
+            if (opMatch) {
+                const dimension = opMatch[1].trim();
+                let operator = opMatch[2].trim();
+                let value = opMatch[3].trim();
+                // Handle 'in' and 'not in' operators
+                if (operator.includes('in')) {
+                    operator = operator.includes('not') ? 'not in' : 'in';
+                    // Parse array values: "value1|value2|value3"
+                    if (value.includes('|')) {
+                        value = value.split('|').map(v => v.trim().replace(/["']/g, ''));
+                    }
+                }
+                else {
+                    // Remove quotes
+                    if ((value.startsWith('"') && value.endsWith('"')) ||
+                        (value.startsWith("'") && value.endsWith("'"))) {
+                        value = value.slice(1, -1);
+                    }
+                    // Convert to number for comparison operators
+                    if (['>', '<', '>=', '<='].includes(operator) && !isNaN(Number(value))) {
+                        value = Number(value);
+                    }
+                }
+                filters.push({
+                    dimension,
+                    operator,
+                    value
+                });
+            }
+        }
+        return filters;
     }
     /**
      * Build MQL query string from structured query
@@ -308,21 +435,34 @@ export class MQLQueryEngine {
         };
     }
     /**
-     * Check if aggregation function is valid
+     * Check if aggregation function is valid for OCI MQL
      */
     isValidAggregation(aggregation) {
         const validAggregations = [
             'mean', 'sum', 'count', 'max', 'min', 'rate',
-            'percentile', 'stddev', 'variance', 'absent', 'present'
+            'percentile', 'stddev', 'variance', 'absent', 'present',
+            'stddev_over_time', 'changes', 'resets'
         ];
         return validAggregations.includes(aggregation);
     }
     /**
-     * Check if window format is valid
+     * Check if window format is valid for OCI MQL
      */
     isValidWindow(window) {
-        // Check for valid time formats: 1m, 5m, 1h, 1d, etc.
-        return /^(\d+[smhd]|auto)$/.test(window);
+        // OCI MQL supports: 1m-60m, 1h-24h, 1d
+        if (window === 'auto')
+            return true;
+        const minuteMatch = window.match(/^(\d+)m$/);
+        if (minuteMatch) {
+            const minutes = parseInt(minuteMatch[1]);
+            return minutes >= 1 && minutes <= 60;
+        }
+        const hourMatch = window.match(/^(\d+)h$/);
+        if (hourMatch) {
+            const hours = parseInt(hourMatch[1]);
+            return hours >= 1 && hours <= 24;
+        }
+        return /^1d$/.test(window);
     }
     /**
      * Convert relative time to absolute timestamps
@@ -374,35 +514,78 @@ export class MQLQueryEngine {
         };
     }
     /**
-     * Generate query suggestions based on namespace
+     * Generate enhanced OCI MQL query suggestions based on namespace
      */
     getQuerySuggestions(namespace) {
         const suggestions = [];
         const namespaceTemplates = {
             'oci_computeagent': [
+                // Basic aggregations
                 'CpuUtilization[5m].mean()',
                 'MemoryUtilization[5m].max()',
                 'NetworksBytesIn[1m].rate()',
-                'DiskBytesRead[5m].sum() by (resourceId)'
+                'DiskBytesRead[5m].sum() by (resourceId)',
+                // Advanced queries
+                'CpuUtilization[5m].percentile(95)',
+                'CpuUtilization[1m]{resourceDisplayName =~ "prod*"}.mean()',
+                'CpuUtilization[5m].mean() > 80',
+                'MemoryUtilization[1m].absent(5m)',
+                'CpuUtilization[1m].mean() && MemoryUtilization[1m].mean()'
             ],
             'oci_lbaas': [
                 'RequestCount[1m].sum()',
                 'ResponseTime[5m].percentile(95)',
                 'ActiveConnections[1m].mean()',
-                'HealthyBackendCount[1m].min()'
+                'HealthyBackendCount[1m].min()',
+                // Advanced load balancer queries
+                'RequestCount[1m].sum() by (backendSetName)',
+                'ResponseTime[5m]{backendSetName = "web-backend"}.percentile(99)',
+                'HealthyBackendCount[1m].min() < 2'
             ],
             'oci_vcn': [
                 'VnicBytesIn[1m].rate()',
                 'VnicBytesOut[1m].rate()',
                 'PacketsIn[1m].sum()',
-                'DroppedPacketsIn[5m].sum() by (resourceId)'
+                'DroppedPacketsIn[5m].sum() by (resourceId)',
+                // Network-specific queries
+                'VnicBytesIn[1m].rate() + VnicBytesOut[1m].rate()',
+                'DroppedPacketsIn[5m].sum() > 100'
+            ],
+            'oci_database': [
+                'CpuUtilization[5m].mean()',
+                'DatabaseConnections[1m].count()',
+                'StorageUtilization[1h].max()',
+                'DatabaseConnections[1m].count() > 80'
+            ],
+            'oci_objectstorage': [
+                'TotalRequestLatency[1m].percentile(95)',
+                'RequestCount[1m].sum()',
+                'TotalRequestLatency[1m].mean() / 1000', // Convert to seconds
+                'RequestCount[1m]{bucketName =~ "backup*"}.sum()'
             ]
         };
-        return namespaceTemplates[namespace] || [
+        const templates = namespaceTemplates[namespace] || [
             '{metricName}[5m].mean()',
             '{metricName}[1m].sum()',
-            '{metricName}[1h].max()'
+            '{metricName}[1h].max()',
+            '{metricName}[5m].percentile(95)',
+            '{metricName}[1m].absent()',
+            'rate({metricName}[1m])'
         ];
+        // Add common OCI MQL patterns
+        const commonPatterns = [
+            '// Alarm condition examples:',
+            '{metricName}[5m].mean() > {threshold}',
+            '{metricName}[1m].absent({duration})',
+            '{metricName}[5m]{dimension = "value"}.percentile(95)',
+            '// Fuzzy matching examples:',
+            '{metricName}[1m]{resourceDisplayName =~ "pattern*"}.mean()',
+            '{metricName}[5m]{resourceId in "id1|id2|id3"}.sum()',
+            '// Join operations:',
+            '{metric1}[1m].mean() && {metric2}[1m].mean()',
+            '{metric1}[1m].mean() || {metric2}[1m].mean()'
+        ];
+        return [...templates, ...commonPatterns];
     }
     /**
      * Export configuration

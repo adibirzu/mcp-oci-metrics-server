@@ -13,18 +13,30 @@ export interface MQLQuery {
     filters?: MQLFilter[];
     groupBy?: string[];
     alarmConditions?: MQLAlarmCondition[];
+    arithmeticOperations?: string[];
+    joinOperator?: '&&' | '||';
+    fuzzyMatching?: boolean;
+    absencePeriod?: string;
+    percentileValue?: number;
+    unitConversion?: {
+        from: string;
+        to: string;
+        factor: number;
+    };
 }
 export interface MQLFilter {
     dimension: string;
-    operator: '=' | '!=' | '~' | '!~' | 'in' | 'not in';
-    value: string | string[];
+    operator: '=' | '!=' | '=~' | '!~' | 'in' | 'not in' | '>' | '<' | '>=' | '<=';
+    value: string | string[] | number;
 }
 export interface MQLAlarmCondition {
     operator: '>' | '<' | '>=' | '<=' | '==' | '!=';
     threshold: number;
     duration?: string;
+    severity?: 'INFO' | 'WARNING' | 'CRITICAL';
+    absenceTime?: string;
 }
-export type MQLAggregation = 'mean' | 'sum' | 'count' | 'max' | 'min' | 'rate' | 'percentile' | 'stddev' | 'variance' | 'absent' | 'present';
+export type MQLAggregation = 'mean' | 'sum' | 'count' | 'max' | 'min' | 'rate' | 'percentile' | 'stddev' | 'variance' | 'absent' | 'present' | 'stddev_over_time' | 'changes' | 'resets';
 export interface MQLTemplate {
     name: string;
     query: string;
@@ -54,13 +66,17 @@ export declare class MQLQueryEngine {
      */
     private initializeDefaultTemplates;
     /**
-     * Parse MQL query string into structured query
+     * Parse MQL query string into structured query with enhanced OCI MQL support
      */
     parseMQL(queryString: string): MQLQuery;
     /**
      * Parse dimension filters from MQL string
      */
     private parseDimensions;
+    /**
+     * Parse advanced filters from MQL dimension string
+     */
+    private parseFilters;
     /**
      * Build MQL query string from structured query
      */
@@ -109,11 +125,11 @@ export declare class MQLQueryEngine {
         errors: string[];
     };
     /**
-     * Check if aggregation function is valid
+     * Check if aggregation function is valid for OCI MQL
      */
     private isValidAggregation;
     /**
-     * Check if window format is valid
+     * Check if window format is valid for OCI MQL
      */
     private isValidWindow;
     /**
@@ -121,7 +137,7 @@ export declare class MQLQueryEngine {
      */
     resolveTimeRange(startTime: string, endTime?: string): TimeRange;
     /**
-     * Generate query suggestions based on namespace
+     * Generate enhanced OCI MQL query suggestions based on namespace
      */
     getQuerySuggestions(namespace: string): string[];
     /**

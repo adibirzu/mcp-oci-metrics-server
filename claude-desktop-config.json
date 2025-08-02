@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "oci-metrics": {
+      "command": "/Users/abirzu/.pyenv/versions/3.11.9/bin/python",
+      "args": [
+        "/Users/abirzu/dev/mcp-oci-metrics-server/fastmcp_server.py"
+      ],
+      "env": {
+        "OCI_COMPARTMENT_ID": "your_compartment_ocid_here",
+        "OCI_REGION": "eu-frankfurt-1",
+        "SUPPRESS_LABEL_WARNING": "True"
+      }
+    }
+  }
+}
